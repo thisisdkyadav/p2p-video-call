@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>P2P Video Call (Manual Signaling)</title>
+    <style>
+        video {
+            width: 45%;
+            margin: 5px;
+            border: 2px solid #444;
+        }
+
+        textarea {
+            width: 90%;
+            height: 100px;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>📹 P2P Video Call (WebRTC, Manual Signaling)</h2>
+
+    <video id="localVideo" autoplay playsinline muted></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+
+    <h3>Offerer (Peer A)</h3>
+    <button id="createOffer">Create Offer</button>
+    <textarea id="offer"></textarea>
+
+    <h3>Paste Answer (from Peer B)</h3>
+    <textarea id="answer"></textarea>
+    <button id="applyAnswer">Apply Answer</button>
+
+    <h3>Answerer (Peer B)</h3>
+    <h4>Paste Offer (from Peer A)</h4>
+    <textarea id="remoteOffer"></textarea>
+    <button id="createAnswer">Create Answer</button>
+    <textarea id="localAnswer"></textarea>
+
+    <h3>ICE Candidates (exchange these too!)</h3>
+    <p>Copy from here and paste into the other peer’s ICE box.</p>
+    <textarea id="localCandidates"></textarea>
+    <textarea id="remoteCandidates"></textarea>
+    <button id="applyCandidates">Apply Remote Candidates</button>
+
+    <script>
+        let pc = new RTCPeerConnection({
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        });
+        let localStream;
+
+        // Show remote video
+        pc.ontrack = (event) => {
+            document.getElementById("remoteVideo").srcObject = event.streams[0];
+        };
+
+        // Collect ICE candidates
+        let candidates = [];
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                candidates.push(event.candidate);
+                document.getElementById("localCandidates").value = JSON.stringify(
+                    candidates
+                );
+            }
+        };
+
+        // Get local media
+        async function initMedia() {
+            localStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true,
+            });
+            document.getElementById("localVideo").srcObject = localStream;
+            localStream.getTracks().forEach((track) =>
+                pc.addTrack(track, localStream)
+            );
+        }
+        initMedia();
+
+        // Create Offer
+        document.getElementById("createOffer").onclick = async () => {
+            let offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            document.getElementById("offer").value = JSON.stringify(offer);
+        };
+
+        // Apply Answer
+        document.getElementById("applyAnswer").onclick = async () => {
+            let answer = JSON.parse(document.getElementById("answer").value);
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        };
+
+        // Create Answer
+        document.getElementById("createAnswer").onclick = async () => {
+            let offer = JSON.parse(document.getElementById("remoteOffer").value);
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            let answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            document.getElementById("localAnswer").value = JSON.stringify(answer);
+        };
+
+        // Apply Remote ICE Candidates
+        document.getElementById("applyCandidates").onclick = async () => {
+            let remote = JSON.parse(
+                document.getElementById("remoteCandidates").value
+            );
+            for (let c of remote) {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(c));
+                } catch (e) {
+                    console.error("Error adding ICE candidate", e);
+                }
+            }
+        };
+    </script>
+</body>
+
+</html>
