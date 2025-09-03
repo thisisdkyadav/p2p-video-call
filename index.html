@@ -3,117 +3,170 @@
 
 <head>
     <meta charset="utf-8" />
-    <title>P2P Video Call (Manual Signaling)</title>
+    <title>P2P Video Call</title>
     <style>
+        body {
+            font-family: sans-serif;
+            text-align: center;
+        }
+
         video {
             width: 45%;
             margin: 5px;
             border: 2px solid #444;
-        }
-
-        textarea {
-            width: 90%;
-            height: 100px;
+            background: black;
         }
     </style>
 </head>
 
 <body>
-    <h2>📹 P2P Video Call (WebRTC, Manual Signaling)</h2>
+    <h2>📹 P2P Video Call (WebRTC + Redis Signaling)</h2>
+    <input id="roomInput" placeholder="Enter room name" />
+    <button id="joinRoom">Join Room</button>
+    <button id="start" disabled>Start Call</button>
 
-    <video id="localVideo" autoplay playsinline muted></video>
-    <video id="remoteVideo" autoplay playsinline></video>
-
-    <h3>Offerer (Peer A)</h3>
-    <button id="createOffer">Create Offer</button>
-    <textarea id="offer"></textarea>
-
-    <h3>Paste Answer (from Peer B)</h3>
-    <textarea id="answer"></textarea>
-    <button id="applyAnswer">Apply Answer</button>
-
-    <h3>Answerer (Peer B)</h3>
-    <h4>Paste Offer (from Peer A)</h4>
-    <textarea id="remoteOffer"></textarea>
-    <button id="createAnswer">Create Answer</button>
-    <textarea id="localAnswer"></textarea>
-
-    <h3>ICE Candidates (exchange these too!)</h3>
-    <p>Copy from here and paste into the other peer’s ICE box.</p>
-    <textarea id="localCandidates"></textarea>
-    <textarea id="remoteCandidates"></textarea>
-    <button id="applyCandidates">Apply Remote Candidates</button>
+    <div>
+        <video id="localVideo" autoplay playsinline muted></video>
+        <video id="remoteVideo" autoplay playsinline></video>
+    </div>
 
     <script>
-        let pc = new RTCPeerConnection({
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-        });
-        let localStream;
+        const API_BASE = "/api"; // change this
+        let pc, room, role;
+        const userId = Math.random().toString(36).slice(2);
+        // Buffer remote ICE candidates that arrive before we have a remoteDescription
+        let pendingRemoteCandidates = [];
 
-        // Show remote video
-        pc.ontrack = (event) => {
-            document.getElementById("remoteVideo").srcObject = event.streams[0];
-        };
+        const localVideo = document.getElementById("localVideo");
+        const remoteVideo = document.getElementById("remoteVideo");
 
-        // Collect ICE candidates
-        let candidates = [];
-        pc.onicecandidate = (event) => {
-            if (event.candidate) {
-                candidates.push(event.candidate);
-                document.getElementById("localCandidates").value = JSON.stringify(
-                    candidates
-                );
-            }
-        };
-
-        // Get local media
-        async function initMedia() {
-            localStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true,
+        async function send(message) {
+            await fetch(`${API_BASE}/send`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ room, sender: userId, message }),
             });
-            document.getElementById("localVideo").srcObject = localStream;
-            localStream.getTracks().forEach((track) =>
-                pc.addTrack(track, localStream)
-            );
         }
-        initMedia();
 
-        // Create Offer
-        document.getElementById("createOffer").onclick = async () => {
-            let offer = await pc.createOffer();
+        async function joinRoom() {
+            room = document.getElementById("roomInput").value;
+            if (!room) return alert("Enter a room name!");
+
+            const res = await fetch(`${API_BASE}/join`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ room, user: userId }),
+            });
+            const data = await res.json();
+            if (data.error) return alert(data.error);
+
+            role = data.role;
+            console.log("Joined as", role);
+
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+            });
+            // More robust remote track handling (some browsers may not supply streams[0])
+            pc.ontrack = (e) => {
+                console.log("ontrack: kind=", e.track.kind, "id=", e.track.id, "streams=", e.streams.map(s => s.id));
+                if (!remoteVideo.srcObject) {
+                    remoteVideo.srcObject = e.streams[0] || new MediaStream();
+                }
+                // If we created our own stream, ensure track added
+                if (remoteVideo.srcObject instanceof MediaStream && !remoteVideo.srcObject.getTracks().includes(e.track)) {
+                    remoteVideo.srcObject.addTrack(e.track);
+                }
+                remoteVideo.play().catch(() => { });
+            };
+            pc.onicecandidate = (e) => e.candidate && send({ type: "candidate", candidate: e.candidate });
+            pc.onconnectionstatechange = () => console.log("connectionState:", pc.connectionState);
+            pc.oniceconnectionstatechange = () => console.log("iceConnectionState:", pc.iceConnectionState);
+            pc.onicegatheringstatechange = () => console.log("iceGatheringState:", pc.iceGatheringState);
+            pc.onsignalingstatechange = () => console.log("signalingState:", pc.signalingState);
+
+            poll();
+
+            if (role === "offerer") {
+                document.getElementById("start").disabled = false;
+                alert("You are the offerer. Click Start Call.");
+            } else {
+                alert("You are the answerer. Wait for the offer.");
+            }
+        }
+
+        async function startCall() {
+            console.log("startCall invoked (role=", role, ")");
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = stream;
+            stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+            console.log("Local tracks added:", stream.getTracks().map(t => t.kind + ":" + t.id));
+
+            const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            document.getElementById("offer").value = JSON.stringify(offer);
-        };
+            console.log("Created and set local offer");
+            await send(offer);
+            console.log("Offer sent");
+        }
 
-        // Apply Answer
-        document.getElementById("applyAnswer").onclick = async () => {
-            let answer = JSON.parse(document.getElementById("answer").value);
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        };
+        async function poll() {
+            const res = await fetch(`${API_BASE}/receive?room=${room}&user=${userId}`);
+            const msgs = await res.json();
 
-        // Create Answer
-        document.getElementById("createAnswer").onclick = async () => {
-            let offer = JSON.parse(document.getElementById("remoteOffer").value);
-            await pc.setRemoteDescription(new RTCSessionDescription(offer));
-            let answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            document.getElementById("localAnswer").value = JSON.stringify(answer);
-        };
+            for (const m of msgs) {
+                const msg = m.data;
 
-        // Apply Remote ICE Candidates
-        document.getElementById("applyCandidates").onclick = async () => {
-            let remote = JSON.parse(
-                document.getElementById("remoteCandidates").value
-            );
-            for (let c of remote) {
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(c));
-                } catch (e) {
-                    console.error("Error adding ICE candidate", e);
+                if (msg.type === "offer" && role === "answerer") {
+                    console.log("Received offer");
+                    await pc.setRemoteDescription(new RTCSessionDescription(msg));
+                    console.log("Set remote offer");
+
+                    // Apply any candidates that arrived early
+                    for (const c of pendingRemoteCandidates) {
+                        try { await pc.addIceCandidate(c); } catch (e) { console.warn("Late addIceCandidate (offer->answer)", e); }
+                    }
+                    pendingRemoteCandidates = [];
+
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    localVideo.srcObject = stream;
+                    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+                    console.log("Answerer local tracks added:", stream.getTracks().map(t => t.kind + ":" + t.id));
+
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    console.log("Created & set local answer");
+                    await send(answer);
+                    console.log("Answer sent");
+                } else if (msg.type === "answer" && role === "offerer") {
+                    console.log("Received answer");
+                    await pc.setRemoteDescription(new RTCSessionDescription(msg));
+                    console.log("Set remote answer");
+
+                    for (const c of pendingRemoteCandidates) {
+                        try { await pc.addIceCandidate(c); } catch (e) { console.warn("Late addIceCandidate (answer->offer)", e); }
+                    }
+                    pendingRemoteCandidates = [];
+                } else if (msg.type === "candidate") {
+                    try {
+                        const candidateObj = new RTCIceCandidate(msg.candidate);
+                        if (!pc.remoteDescription || !pc.remoteDescription.type) {
+                            // Can't add yet; buffer until remoteDescription is set
+                            pendingRemoteCandidates.push(candidateObj);
+                            console.log("Buffered remote ICE candidate (total now", pendingRemoteCandidates.length, ")");
+                        } else {
+                            await pc.addIceCandidate(candidateObj);
+                            console.log("Added remote ICE candidate");
+                        }
+                    } catch (e) {
+                        console.error("ICE error", e);
+                    }
                 }
             }
-        };
+
+            setTimeout(poll, 1000);
+        }
+
+        document.getElementById("joinRoom").onclick = joinRoom;
+        document.getElementById("start").onclick = startCall;
     </script>
 </body>
 
