@@ -4,6 +4,13 @@ const userId = Math.random().toString(36).slice(2)
 // Buffer remote ICE candidates that arrive before we have a remoteDescription
 let pendingRemoteCandidates = []
 
+// Use lower-res video (480p) and lower frame rate to reduce bandwidth
+const MEDIA_CONSTRAINTS = {
+  // video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15, max: 15 } },
+  video: true,
+  audio: true,
+}
+
 const localVideo = document.getElementById("localVideo")
 const remoteVideo = document.getElementById("remoteVideo")
 
@@ -70,7 +77,7 @@ async function joinRoom() {
 
 async function startCall() {
   console.log("startCall invoked (role=", role, ")")
-  const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+  const stream = await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS)
   localVideo.srcObject = stream
   stream.getTracks().forEach((t) => pc.addTrack(t, stream))
   console.log(
@@ -107,7 +114,7 @@ async function poll() {
       }
       pendingRemoteCandidates = []
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS)
       localVideo.srcObject = stream
       stream.getTracks().forEach((t) => pc.addTrack(t, stream))
       console.log(
